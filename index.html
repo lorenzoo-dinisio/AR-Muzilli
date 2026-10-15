@@ -36,7 +36,7 @@
         <br>
         <b>Tolerancia Hue:</b> <input type="number" id="hueTol" value="20" style="width: 50px;">
         <br><br>
-        <span id="status">Enfocá la tarjeta en el piso...</span>
+        <span id="status">Enfocá el color rojo...</span>
         <br><br>
         <button id="btn-reiniciar" style="display: none; padding: 10px; background: #FF3366; color: white; border: none; border-radius: 5px; cursor: pointer;">Volver a escanear</button>
     </div>
@@ -51,14 +51,14 @@
     <!-- Escena AR -->
     <a-scene embedded vr-mode-ui="enabled: false" color-space="sRGB" renderer="alpha: true" background="transparent: true" cursor="rayOrigin: mouse" raycaster="objects: .interactivo">
         
-<a-assets>
-    <a-asset-item id="Muzilli" src="et20optimizada.glb"></a-asset-item>
-</a-assets>
+        <a-assets>
+            <a-asset-item id="Muzilli" src="et20optimizada.glb"></a-asset-item>
+        </a-assets>
 
-        <!-- Cámara con Giroscopio -->
+        <!-- Cámara independiente para lectura limpia en pantalla -->
         <a-entity id="camara-ar" camera position="0 1.6 0" look-controls="magicWindowTrackingEnabled: true; touchEnabled: false"></a-entity>
 
-        <!-- Contenedor del Colegio (Oculto al inicio) -->
+        <!-- Contenedor del Colegio (Posición inicial oculta) -->
         <a-entity id="contenedor-Mazairita" position="0 -100 -5"> 
             
             <a-entity gltf-model="#Muzilli" scale="0.005 0.005 0.005" animation="property: rotation; to: 0 360 0; loop: true; dur: 10000; easing: linear"></a-entity>
@@ -73,7 +73,6 @@
 
     <!-- Lógica de la Aplicación -->
     <script>
-        // Referencias generales
         const video = document.getElementById('video-background');
         const canvas = document.getElementById('hiddenCanvas');
         const ctx = canvas.getContext('2d');
@@ -83,7 +82,6 @@
         const tolInput = document.getElementById('hueTol');
         const btnReiniciar = document.getElementById('btn-reiniciar');
 
-        // Referencias al cartel HTML
         const panelInfo = document.getElementById('panel-info');
         const infoTitulo = document.getElementById('info-titulo');
         const infoTexto = document.getElementById('info-texto');
@@ -91,7 +89,7 @@
 
         let modeloFijado = false; 
 
-        // INTERACCIONES CON LOS NODOS 3D
+        // Interacciones UI
         document.getElementById('btn-edicion').addEventListener('click', () => {
             infoTitulo.innerText = "Edición y Postproducción";
             infoTexto.innerText = "Acá utilizamos Premiere y CapCut para montar nuestros proyectos audiovisuales, agregar efectos y color.";
@@ -112,11 +110,12 @@
         btnReiniciar.addEventListener('click', () => {
             modeloFijado = false; 
             btnReiniciar.style.display = 'none';
+            // Ocultamos de nuevo la maqueta enviándola lejos
             maqueta.setAttribute('position', '0 -100 -5'); 
             requestAnimationFrame(procesarFrame); 
         });
 
-        // INICIO DE CÁMARA
+        // Cámara
         navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } }) 
             .then(stream => {
                 video.srcObject = stream;
@@ -128,7 +127,7 @@
                 statusText.innerText = "Error de cámara. Verificá los permisos.";
             });
 
-        // MATEMÁTICA DE COLOR (RGB a HSV)
+        // Conversión RGB a HSV
         function rgbToHsv(r, g, b) {
             r /= 255, g /= 255, b /= 255;
             let max = Math.max(r, g, b), min = Math.min(r, g, b);
@@ -148,7 +147,7 @@
             return [h * 360, s * 100, v * 100];
         }
 
-        // BUCLE DE ANÁLISIS DE VIDEO Y TRACKING
+        // Bucle de procesamiento de fotogramas
         function procesarFrame() {
             if (modeloFijado) return;
 
@@ -163,7 +162,7 @@
                 const tolerancia = parseFloat(tolInput.value);
 
                 let count = 0;
-                const step = 4 * 10; // Saltamos píxeles para no sobrecargar el celular
+                const step = 4 * 10; 
 
                 for (let i = 0; i < data.length; i += step) {
                     let r = data[i]; let g = data[i+1]; let b = data[i+2];
@@ -172,7 +171,6 @@
                     let hueDiff = Math.abs(h - targetHue);
                     if (hueDiff > 180) hueDiff = 360 - hueDiff; 
 
-                    // Filtro de tolerancia de Tono, Saturación y Brillo
                     if (hueDiff <= tolerancia && s > 30 && v > 20) {
                         count++;
                     }
@@ -182,26 +180,27 @@
                     statusText.innerText = "¡Colegio Desbloqueado!";
                     statusText.style.color = "green";
 
-                    // Anclaje al espacio usando el giroscopio de la cámara
-                    let cam = document.getElementById('camara-ar').object3D;
-                    let posicionAnclaje = new THREE.Vector3(0, 0, -1.5); // 1.5 mts adelante
-                    posicionAnclaje.applyMatrix4(cam.matrixWorld);
-
-                    maqueta.object3D.position.copy(posicionAnclaje);
-                    maqueta.object3D.lookAt(cam.position);
+                    // FORZAR RENDERIZADO Y POSICIÓN ENFRENTE DE LA CÁMARA
+                    // Colocamos el contenedor exactamente a 2 metros enfrente del usuario (Z = -2)
+                    // y un poquito más abajo (Y = -0.5) para que se vea completo en la pantalla.
+                    maqueta.setAttribute('position', '0 -0.5 -2');
                     
-                    // Bloqueo de la posición para dejar de escanear (ahorra batería)
+                    // Forzamos la actualización explícita del componente en el motor de A-Frame
+                    let entidad3D = maqueta.components['gltf-model'];
+                    if(entidad3D) {
+                        entidad3D.update();
+                    }
+
                     modeloFijado = true;
                     btnReiniciar.style.display = 'block';
 
                 } else {
-                    statusText.innerText = "Enfocá la tarjeta en el piso...";
+                    statusText.innerText = "Enfocá el color rojo...";
                     statusText.style.color = "red";
                     maqueta.setAttribute('position', '0 -100 -5'); 
                 }
             }
             
-            // Si no encontró el color, el ciclo se repite
             if (!modeloFijado) {
                 requestAnimationFrame(procesarFrame);
             }
