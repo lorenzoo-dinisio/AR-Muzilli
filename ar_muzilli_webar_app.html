@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>AR Muzilli - Técnica N°20</title>
+    <!-- A-Frame -->
+    <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        #hiddenCanvas { display: none; }
+        #video-background {
+            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; object-fit: cover; z-index: -1; 
+        }
+        #ui-container {
+            position: absolute; top: 10px; left: 10px; background: rgba(255, 255, 255, 0.8);
+            padding: 10px; border-radius: 8px; z-index: 100; font-family: sans-serif; font-size: 14px;
+        }
+        #panel-info {
+            display: none; position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); 
+            background: rgba(255, 255, 255, 0.95); padding: 20px; border-radius: 15px; width: 80%; 
+            max-width: 350px; z-index: 1000; font-family: sans-serif; box-shadow: 0px 4px 10px rgba(0,0,0,0.3); 
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Video y Canvas oculto para el Tracking -->
+    <video id="video-background" autoplay playsinline></video>
+    <canvas id="hiddenCanvas"></canvas>
+
+    <!-- Controles y Feedback de Color -->
+    <div id="ui-container">
+        <b>Target Hue (0-360):</b> <input type="number" id="targetHue" value="0" style="width: 50px;">
+        <br>
+        <b>Tolerancia Hue:</b> <input type="number" id="hueTol" value="20" style="width: 50px;">
+        <br><br>
+        <span id="status">Enfocá la tarjeta en el piso...</span>
+        <br><br>
+        <button id="btn-reiniciar" style="display: none; padding: 10px; background: #FF3366; color: white; border: none; border-radius: 5px; cursor: pointer;">Volver a escanear</button>
+    </div>
+
+    <!-- Cartel Dinámico de Información -->
+    <div id="panel-info">
+        <h2 id="info-titulo" style="margin: 0 0 10px 0; color: #333;">Título</h2>
+        <p id="info-texto" style="margin: 0 0 15px 0; color: #555; line-height: 1.4;">Texto</p>
+        <div id="panel-botones"></div>
+    </div>
+
+    <!-- Escena AR -->
+    <a-scene embedded vr-mode-ui="enabled: false" color-space="sRGB" renderer="alpha: true" background="transparent: true" cursor="rayOrigin: mouse" raycaster="objects: .interactivo">
+        
+        <a-assets>
+            <a-asset-item id="Mazairita" src="MazairitaGiro.glb"></a-asset-item>
+        </a-assets>
+
+        <!-- Cámara con Giroscopio -->
+        <a-entity id="camara-ar" camera position="0 1.6 0" look-controls="magicWindowTrackingEnabled: true; touchEnabled: false"></a-entity>
+
+        <!-- Contenedor del Colegio (Oculto al inicio) -->
+        <a-entity id="contenedor-Mazairita" position="0 -100 -5"> 
+            
+            <a-entity gltf-model="#Mazairita" scale="0.2 0.2 0.2" animation="property: rotation; to: 0 360 0; loop: true; dur: 10000; easing: linear"></a-entity>
+
+            <!-- Nodos Interactivos -->
+            <a-sphere class="interactivo" id="btn-edicion" position="-2 1.5 -1" radius="0.3" color="#33CCFF" animation="property: scale; to: 1.2 1.2 1.2; dir: alternate; dur: 800; loop: true"></a-sphere>
+
+            <a-box class="interactivo" id="btn-web" position="0 4 0" depth="0.5" height="0.5" width="0.5" color="#FFCC00" animation="property: rotation; to: 0 360 0; dur: 3000; loop: true; easing: linear"></a-box>
+
+        </a-entity>
+    </a-scene>
+
+    <!-- Lógica de la Aplicación -->
+    <script>
+        // Referencias generales
+        const video = document.getElementById('video-background');
+        const canvas = document.getElementById('hiddenCanvas');
+        const ctx = canvas.getContext('2d');
+        const maqueta = document.getElementById('contenedor-Mazairita');
+        const statusText = document.getElementById('status');
+        const hueInput = document.getElementById('targetHue');
+        const tolInput = document.getElementById('hueTol');
+        const btnReiniciar = document.getElementById('btn-reiniciar');
+
+        // Referencias al cartel HTML
+        const panelInfo = document.getElementById('panel-info');
+        const infoTitulo = document.getElementById('info-titulo');
+        const infoTexto = document.getElementById('info-texto');
+        const panelBotones = document.getElementById('panel-botones');
+
+        let modeloFijado = false; 
+
+        // INTERACCIONES CON LOS NODOS 3D
+        document.getElementById('btn-edicion').addEventListener('click', () => {
+            infoTitulo.innerText = "Edición y Postproducción";
+            infoTexto.innerText = "Acá utilizamos Premiere y CapCut para montar nuestros proyectos audiovisuales, agregar efectos y color.";
+            panelBotones.innerHTML = `<button onclick="document.getElementById('panel-info').style.display = 'none'" style="background: #333; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-weight: bold; cursor: pointer;">Cerrar</button>`;
+            panelInfo.style.display = "block";
+        });
+
+        document.getElementById('btn-web').addEventListener('click', () => {
+            infoTitulo.innerText = "Página Oficial";
+            infoTexto.innerText = "Conocé más sobre las especialidades del colegio en nuestra web. Vas a salir de la cámara. ¿Querés continuar?";
+            panelBotones.innerHTML = `
+                <button onclick="window.location.href = 'https://buenosaires.gob.ar/educacion/escuelas'" style="background: #007BFF; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-weight: bold; margin-right: 10px; cursor: pointer;">Ir a la Web</button>
+                <button onclick="document.getElementById('panel-info').style.display = 'none'" style="background: #ccc; color: #333; border: none; padding: 10px 20px; border-radius: 8px; font-weight: bold; cursor: pointer;">Cancelar</button>
+            `;
+            panelInfo.style.display = "block";
+        });
+
+        btnReiniciar.addEventListener('click', () => {
+            modeloFijado = false; 
+            btnReiniciar.style.display = 'none';
+            maqueta.setAttribute('position', '0 -100 -5'); 
+            requestAnimationFrame(procesarFrame); 
+        });
+
+        // INICIO DE CÁMARA
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } }) 
+            .then(stream => {
+                video.srcObject = stream;
+                video.play();
+                requestAnimationFrame(procesarFrame);
+            })
+            .catch(err => {
+                console.error("Error accediendo a la cámara: ", err);
+                statusText.innerText = "Error de cámara. Verificá los permisos.";
+            });
+
+        // MATEMÁTICA DE COLOR (RGB a HSV)
+        function rgbToHsv(r, g, b) {
+            r /= 255, g /= 255, b /= 255;
+            let max = Math.max(r, g, b), min = Math.min(r, g, b);
+            let h, s, v = max;
+            let d = max - min;
+            s = max == 0 ? 0 : d / max;
+            if (max == min) {
+                h = 0; 
+            } else {
+                switch (max) {
+                    case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+                    case g: h = (b - r) / d + 2; break;
+                    case b: h = (r - g) / d + 4; break;
+                }
+                h /= 6;
+            }
+            return [h * 360, s * 100, v * 100];
+        }
+
+        // BUCLE DE ANÁLISIS DE VIDEO Y TRACKING
+        function procesarFrame() {
+            if (modeloFijado) return;
+
+            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const frameData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const data = frameData.data;
+
+                const targetHue = parseFloat(hueInput.value);
+                const tolerancia = parseFloat(tolInput.value);
+
+                let count = 0;
+                const step = 4 * 10; // Saltamos píxeles para no sobrecargar el celular
+
+                for (let i = 0; i < data.length; i += step) {
+                    let r = data[i]; let g = data[i+1]; let b = data[i+2];
+                    let [h, s, v] = rgbToHsv(r, g, b);
+
+                    let hueDiff = Math.abs(h - targetHue);
+                    if (hueDiff > 180) hueDiff = 360 - hueDiff; 
+
+                    // Filtro de tolerancia de Tono, Saturación y Brillo
+                    if (hueDiff <= tolerancia && s > 30 && v > 20) {
+                        count++;
+                    }
+                }
+
+                if (count > 50) { 
+                    statusText.innerText = "¡Colegio Desbloqueado!";
+                    statusText.style.color = "green";
+
+                    // Anclaje al espacio usando el giroscopio de la cámara
+                    let cam = document.getElementById('camara-ar').object3D;
+                    let posicionAnclaje = new THREE.Vector3(0, 0, -1.5); // 1.5 mts adelante
+                    posicionAnclaje.applyMatrix4(cam.matrixWorld);
+
+                    maqueta.object3D.position.copy(posicionAnclaje);
+                    maqueta.object3D.lookAt(cam.position);
+                    
+                    // Bloqueo de la posición para dejar de escanear (ahorra batería)
+                    modeloFijado = true;
+                    btnReiniciar.style.display = 'block';
+
+                } else {
+                    statusText.innerText = "Enfocá la tarjeta en el piso...";
+                    statusText.style.color = "red";
+                    maqueta.setAttribute('position', '0 -100 -5'); 
+                }
+            }
+            
+            // Si no encontró el color, el ciclo se repite
+            if (!modeloFijado) {
+                requestAnimationFrame(procesarFrame);
+            }
+        }
+    </script>
+</body>
+</html>
