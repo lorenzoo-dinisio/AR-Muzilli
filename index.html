@@ -1,0 +1,2065 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover"
+  >
+
+  <title>AR Muzilli - Técnica N°20</title>
+
+  <!--
+    THREE.JS SIN A-FRAME.
+    Usamos la misma versión para Three y sus addons.
+  -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      font-family: Arial, Helvetica, sans-serif;
+      overscroll-behavior: none;
+    }
+
+    /*
+      ==========================================================
+      CAMARA HTML PARA EL ESCANEO HSV
+      ==========================================================
+      Esta cámara solamente existe ANTES de entrar a WebXR.
+      Después WebXR/ARCore usa la cámara directamente.
+    */
+    #scanner-video {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      object-fit: cover;
+      background: #000;
+      z-index: 10;
+    }
+
+    #scanner-canvas {
+      display: none;
+    }
+
+    /*
+      ==========================================================
+      CANVAS THREE.JS
+      ==========================================================
+      Está oculto durante el escaneo HSV.
+      Se muestra solamente cuando WebXR realmente entra en AR.
+    */
+    #three-canvas {
+      display: none;
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: 20;
+    }
+
+    /*
+      ==========================================================
+      UI / DOM OVERLAY
+      ==========================================================
+    */
+    #overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      pointer-events: none;
+    }
+
+    #top-panel {
+      position: absolute;
+      top: max(14px, env(safe-area-inset-top));
+      left: 50%;
+      transform: translateX(-50%);
+
+      width: min(91vw, 500px);
+      box-sizing: border-box;
+
+      padding: 12px 14px;
+      border-radius: 14px;
+
+      background: rgba(0, 0, 0, 0.72);
+      color: #fff;
+
+      text-align: center;
+      line-height: 1.35;
+
+      box-shadow: 0 5px 18px rgba(0, 0, 0, 0.28);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+    }
+
+    #status {
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    #debug {
+      margin-top: 5px;
+      font-size: 11px;
+      opacity: 0.72;
+    }
+
+    /*
+      Recuadro donde queremos que aparezca la tarjeta roja.
+    */
+    #scan-guide {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+
+      width: min(67vw, 340px);
+      aspect-ratio: 1.6 / 1;
+
+      transform: translate(-50%, -50%);
+
+      border: 3px solid rgba(255, 255, 255, 0.98);
+      border-radius: 18px;
+      box-sizing: border-box;
+
+      box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.18);
+      pointer-events: none;
+    }
+
+    #scan-guide::after {
+      content: "Poné el dorso rojo de la tarjeta dentro del recuadro";
+
+      position: absolute;
+      left: 50%;
+      top: calc(100% + 14px);
+
+      transform: translateX(-50%);
+      width: 92vw;
+
+      color: #fff;
+      font-size: 14px;
+      font-weight: 800;
+      text-align: center;
+
+      text-shadow: 0 2px 6px #000;
+    }
+
+    /*
+      Botón propio.
+      No usamos ARButton ni A-Frame.
+    */
+    #btn-start-ar {
+      display: none;
+
+      position: absolute;
+      left: 50%;
+      bottom: max(36px, env(safe-area-inset-bottom));
+
+      transform: translateX(-50%);
+
+      min-width: 275px;
+      max-width: 90vw;
+
+      padding: 16px 22px;
+
+      border: 0;
+      border-radius: 999px;
+
+      background: #fff;
+      color: #111;
+
+      font-size: 16px;
+      font-weight: 900;
+
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.38);
+
+      pointer-events: auto;
+    }
+
+    #btn-start-ar:disabled {
+      opacity: 0.60;
+    }
+
+    #xr-controls {
+      display: none;
+
+      position: absolute;
+      left: 50%;
+      bottom: max(24px, env(safe-area-inset-bottom));
+
+      transform: translateX(-50%);
+
+      gap: 10px;
+      align-items: center;
+      justify-content: center;
+
+      pointer-events: auto;
+    }
+
+    #xr-controls button {
+      border: 1px solid rgba(255, 255, 255, 0.28);
+      border-radius: 999px;
+
+      padding: 11px 16px;
+
+      background: rgba(15, 15, 15, 0.84);
+      color: #fff;
+
+      font-size: 14px;
+      font-weight: 800;
+
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+    }
+
+    /*
+      Cuando el navegador acepta DOM Overlay, estos controles
+      siguen siendo HTML durante la sesión AR.
+    */
+    #overlay:xr-overlay #xr-controls {
+      display: flex;
+    }
+
+    #btn-reposition {
+      display: none;
+    }
+
+    #btn-exit {
+      display: none;
+    }
+
+    #btn-restart {
+      display: none;
+
+      position: absolute;
+      left: 50%;
+      bottom: max(30px, env(safe-area-inset-bottom));
+
+      transform: translateX(-50%);
+
+      padding: 13px 18px;
+      border: 0;
+      border-radius: 999px;
+
+      background: #fff;
+      color: #111;
+
+      font-weight: 900;
+      pointer-events: auto;
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- Cámara previa para HSV -->
+  <video
+    id="scanner-video"
+    autoplay
+    playsinline
+    muted>
+  </video>
+
+  <canvas
+    id="scanner-canvas"
+    width="160"
+    height="120">
+  </canvas>
+
+  <!-- Canvas manejado por Three.js/WebXR -->
+  <canvas id="three-canvas"></canvas>
+
+  <!--
+    Este mismo overlay se solicita como DOM Overlay
+    cuando abrimos la sesión WebXR.
+  -->
+  <div id="overlay">
+
+    <div id="top-panel">
+      <div id="status">
+        Inicializando...
+      </div>
+
+      <div id="debug">
+        Cámara: esperando · WebXR: comprobando · GLB: cargando
+      </div>
+    </div>
+
+    <div id="scan-guide"></div>
+
+    <button
+      id="btn-start-ar"
+      type="button">
+      Entrar en Realidad Aumentada
+    </button>
+
+    <div id="xr-controls">
+
+      <button
+        id="btn-reposition"
+        type="button">
+        Reubicar colegio
+      </button>
+
+      <button
+        id="btn-exit"
+        type="button">
+        Salir de AR
+      </button>
+
+    </div>
+
+    <button
+      id="btn-restart"
+      type="button">
+      Empezar de nuevo
+    </button>
+
+  </div>
+
+
+  <script type="module">
+
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+
+    // ============================================================
+    // ELEMENTOS HTML
+    // ============================================================
+
+    const video =
+      document.getElementById('scanner-video');
+
+    const scannerCanvas =
+      document.getElementById('scanner-canvas');
+
+    const scannerCtx =
+      scannerCanvas.getContext(
+        '2d',
+        { willReadFrequently: true }
+      );
+
+    const threeCanvas =
+      document.getElementById('three-canvas');
+
+    const overlay =
+      document.getElementById('overlay');
+
+    const statusText =
+      document.getElementById('status');
+
+    const debugText =
+      document.getElementById('debug');
+
+    const scanGuide =
+      document.getElementById('scan-guide');
+
+    const btnStartAR =
+      document.getElementById('btn-start-ar');
+
+    const btnReposition =
+      document.getElementById('btn-reposition');
+
+    const btnExit =
+      document.getElementById('btn-exit');
+
+    const btnRestart =
+      document.getElementById('btn-restart');
+
+
+    // ============================================================
+    // ESTADO
+    // ============================================================
+
+    let cameraStream = null;
+
+    let redUnlocked = false;
+
+    let xrSupported = false;
+
+    let modelLoaded = false;
+
+    let xrSession = null;
+
+    let hitTestSource = null;
+
+    let hitTestSourceRequested = false;
+
+    let modelPlaced = false;
+
+    let latestHitMatrix = null;
+
+    let consecutiveRedFrames = 0;
+
+
+    // ============================================================
+    // CONFIGURACION HSV
+    // ============================================================
+
+    const TARGET_HUE = 0;
+
+    const HUE_TOLERANCE = 20;
+
+    const MIN_SATURATION = 50;
+
+    const MIN_VALUE = 25;
+
+    /*
+      El rojo tiene que ocupar 22% de la región central.
+    */
+    const REQUIRED_RED_RATIO = 0.22;
+
+    /*
+      Tiene que mantenerse durante 10 frames consecutivos.
+    */
+    const REQUIRED_CONSECUTIVE_FRAMES = 10;
+
+
+    // ============================================================
+    // THREE.JS
+    // ============================================================
+
+    const scene =
+      new THREE.Scene();
+
+
+    /*
+      En WebXR la pose de esta cámara será controlada por
+      el runtime XR / ARCore.
+    */
+    const camera =
+      new THREE.PerspectiveCamera(
+        70,
+        window.innerWidth / window.innerHeight,
+        0.01,
+        100
+      );
+
+
+    const renderer =
+      new THREE.WebGLRenderer({
+        canvas: threeCanvas,
+        alpha: true,
+        antialias: true
+      });
+
+
+    renderer.setPixelRatio(
+      Math.min(window.devicePixelRatio, 2)
+    );
+
+
+    renderer.setSize(
+      window.innerWidth,
+      window.innerHeight
+    );
+
+
+    renderer.outputColorSpace =
+      THREE.SRGBColorSpace;
+
+
+    renderer.xr.enabled = true;
+
+
+    /*
+      "local" es el espacio que vamos a usar para que
+      el objeto permanezca en coordenadas del mundo AR.
+    */
+    renderer.xr.setReferenceSpaceType('local');
+
+
+    /*
+      Luces simples.
+      Si tu GLB usa materiales PBR, esto evita que quede oscuro.
+    */
+    const hemiLight =
+      new THREE.HemisphereLight(
+        0xffffff,
+        0x444444,
+        2.4
+      );
+
+    scene.add(hemiLight);
+
+
+    const directionalLight =
+      new THREE.DirectionalLight(
+        0xffffff,
+        2.0
+      );
+
+    directionalLight.position.set(
+      2,
+      4,
+      2
+    );
+
+    scene.add(directionalLight);
+
+
+    /*
+      ==========================================================
+      RETICULO
+      ==========================================================
+      Círculo blanco que aparece solamente cuando
+      WebXR encuentra una superficie horizontal.
+    */
+    const reticleGeometry =
+      new THREE.RingGeometry(
+        0.075,
+        0.105,
+        48
+      );
+
+
+    /*
+      RingGeometry mira hacia +Z.
+      Lo rotamos para que quede paralelo al piso.
+    */
+    reticleGeometry.rotateX(
+      -Math.PI / 2
+    );
+
+
+    const reticleMaterial =
+      new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.92,
+        side: THREE.DoubleSide
+      });
+
+
+    const reticle =
+      new THREE.Mesh(
+        reticleGeometry,
+        reticleMaterial
+      );
+
+
+    reticle.matrixAutoUpdate = false;
+
+    reticle.visible = false;
+
+    scene.add(reticle);
+
+
+    /*
+      ==========================================================
+      CONTENEDOR DEL COLEGIO
+      ==========================================================
+      Este objeto recibe la matriz del hit test.
+
+      El modelo va adentro y se corrige para que su punto
+      más bajo quede apoyado en Y=0.
+    */
+    const schoolRoot =
+      new THREE.Group();
+
+
+    schoolRoot.visible = false;
+
+    scene.add(schoolRoot);
+
+
+    let schoolModel = null;
+
+
+    // ============================================================
+    // CARGA DEL GLB
+    // ============================================================
+
+    const loader =
+      new GLTFLoader();
+
+
+    loader.load(
+
+      './et20optimizada.glb',
+
+      (gltf) => {
+
+        schoolModel =
+          gltf.scene;
+
+
+        /*
+          Escala que veníamos usando en A-Frame.
+        */
+        schoolModel.scale.setScalar(
+          0.005
+        );
+
+
+        /*
+          IMPORTANTE:
+          Calculamos la caja DESPUES de escalar.
+        */
+        schoolModel.updateMatrixWorld(
+          true
+        );
+
+
+        const box =
+          new THREE.Box3()
+          .setFromObject(
+            schoolModel
+          );
+
+
+        const center =
+          box.getCenter(
+            new THREE.Vector3()
+          );
+
+
+        /*
+          Centramos X/Z en el punto de colocación
+          y apoyamos la parte inferior sobre Y = 0.
+        */
+        schoolModel.position.x -=
+          center.x;
+
+
+        schoolModel.position.z -=
+          center.z;
+
+
+        schoolModel.position.y -=
+          box.min.y;
+
+
+        schoolModel.updateMatrixWorld(
+          true
+        );
+
+
+        schoolRoot.add(
+          schoolModel
+        );
+
+
+        modelLoaded = true;
+
+
+        updateDebug();
+
+
+        /*
+          Si el usuario ya escaneó el rojo,
+          ahora sí habilitamos el botón AR.
+        */
+        updateStartButton();
+
+
+        console.log(
+          '[GLB] et20optimizada.glb cargado.'
+        );
+
+      },
+
+      (progressEvent) => {
+
+        if (
+          progressEvent.total &&
+          progressEvent.total > 0
+        ) {
+
+          const percent =
+            Math.round(
+              progressEvent.loaded /
+              progressEvent.total *
+              100
+            );
+
+
+          if (!redUnlocked) {
+
+            debugText.textContent =
+              `GLB: ${percent}% · preparando experiencia`;
+
+          }
+
+        }
+
+      },
+
+      (error) => {
+
+        console.error(
+          '[GLB] Error:',
+          error
+        );
+
+
+        statusText.textContent =
+          'No se pudo cargar et20optimizada.glb.';
+
+
+        debugText.textContent =
+          'GLB: ERROR';
+
+      }
+
+    );
+
+
+    // ============================================================
+    // SOPORTE WEBXR
+    // ============================================================
+
+    async function checkXRSupport() {
+
+      if (!navigator.xr) {
+
+        xrSupported = false;
+
+        updateDebug();
+
+        return;
+
+      }
+
+
+      try {
+
+        xrSupported =
+          await navigator.xr.isSessionSupported(
+            'immersive-ar'
+          );
+
+
+      } catch (error) {
+
+        console.error(
+          '[WebXR] Error comprobando soporte:',
+          error
+        );
+
+
+        xrSupported = false;
+
+      }
+
+
+      updateDebug();
+
+      updateStartButton();
+
+    }
+
+
+    // ============================================================
+    // CAMARA HTML
+    // ============================================================
+
+    async function startPreviewCamera() {
+
+      try {
+
+        /*
+          Cerramos un stream anterior si hubiera quedado abierto.
+        */
+        stopPreviewCamera();
+
+
+        cameraStream =
+          await navigator.mediaDevices.getUserMedia({
+
+            video: {
+
+              facingMode: {
+                ideal: 'environment'
+              },
+
+              width: {
+                ideal: 1280
+              },
+
+              height: {
+                ideal: 720
+              }
+
+            },
+
+            audio: false
+
+          });
+
+
+        video.srcObject =
+          cameraStream;
+
+
+        video.style.display =
+          'block';
+
+
+        await video.play();
+
+
+        updateDebug();
+
+
+        if (!redUnlocked) {
+
+          statusText.textContent =
+            'Enfocá el dorso rojo de la tarjeta.';
+
+
+          requestAnimationFrame(
+            processHSVFrame
+          );
+
+        }
+
+
+      } catch (error) {
+
+        console.error(
+          '[CAM] Error:',
+          error
+        );
+
+
+        statusText.textContent =
+          'No pude abrir la cámara. Revisá el permiso del navegador.';
+
+
+        updateDebug(
+          'error cámara'
+        );
+
+      }
+
+    }
+
+
+    function stopPreviewCamera() {
+
+      if (cameraStream) {
+
+        cameraStream
+          .getTracks()
+          .forEach(
+            track => track.stop()
+          );
+
+
+        cameraStream = null;
+
+      }
+
+    }
+
+
+    // ============================================================
+    // RGB -> HSV
+    // ============================================================
+
+    function rgbToHsv(
+      r,
+      g,
+      b
+    ) {
+
+      r /= 255;
+      g /= 255;
+      b /= 255;
+
+
+      const max =
+        Math.max(
+          r,
+          g,
+          b
+        );
+
+
+      const min =
+        Math.min(
+          r,
+          g,
+          b
+        );
+
+
+      const delta =
+        max - min;
+
+
+      let h = 0;
+
+
+      const s =
+        max === 0
+          ? 0
+          : delta / max;
+
+
+      const v =
+        max;
+
+
+      if (delta !== 0) {
+
+        switch (max) {
+
+          case r:
+
+            h =
+              ((g - b) / delta) % 6;
+
+            break;
+
+
+          case g:
+
+            h =
+              (b - r) / delta + 2;
+
+            break;
+
+
+          case b:
+
+            h =
+              (r - g) / delta + 4;
+
+            break;
+
+        }
+
+
+        h *= 60;
+
+
+        if (h < 0) {
+          h += 360;
+        }
+
+      }
+
+
+      return [
+        h,
+        s * 100,
+        v * 100
+      ];
+
+    }
+
+
+    function hueDistance(
+      a,
+      b
+    ) {
+
+      const diff =
+        Math.abs(
+          a - b
+        );
+
+
+      return Math.min(
+        diff,
+        360 - diff
+      );
+
+    }
+
+
+    // ============================================================
+    // TRACKING HSV
+    // ============================================================
+
+    function processHSVFrame() {
+
+      /*
+        Una vez validado el rojo, NO volvemos a procesar HSV.
+        La cámara, sin embargo, sigue abierta hasta que el usuario
+        toque "Entrar en Realidad Aumentada".
+      */
+      if (redUnlocked) {
+        return;
+      }
+
+
+      if (
+        video.readyState >=
+        video.HAVE_CURRENT_DATA
+      ) {
+
+        const width =
+          scannerCanvas.width;
+
+
+        const height =
+          scannerCanvas.height;
+
+
+        scannerCtx.drawImage(
+          video,
+          0,
+          0,
+          width,
+          height
+        );
+
+
+        const pixels =
+          scannerCtx.getImageData(
+            0,
+            0,
+            width,
+            height
+          ).data;
+
+
+        /*
+          Solo analizamos la zona central,
+          equivalente al recuadro visual.
+        */
+        const x1 =
+          Math.floor(
+            width * 0.28
+          );
+
+
+        const x2 =
+          Math.floor(
+            width * 0.72
+          );
+
+
+        const y1 =
+          Math.floor(
+            height * 0.30
+          );
+
+
+        const y2 =
+          Math.floor(
+            height * 0.70
+          );
+
+
+        let redPixels = 0;
+
+        let sampledPixels = 0;
+
+
+        /*
+          Saltamos píxeles para bajar consumo.
+        */
+        for (
+          let y = y1;
+          y < y2;
+          y += 2
+        ) {
+
+          for (
+            let x = x1;
+            x < x2;
+            x += 2
+          ) {
+
+            const index =
+              (
+                y * width +
+                x
+              ) * 4;
+
+
+            const [
+              h,
+              s,
+              v
+            ] =
+              rgbToHsv(
+
+                pixels[index],
+
+                pixels[index + 1],
+
+                pixels[index + 2]
+
+              );
+
+
+            sampledPixels++;
+
+
+            if (
+
+              hueDistance(
+                h,
+                TARGET_HUE
+              ) <=
+              HUE_TOLERANCE
+
+              &&
+
+              s >=
+              MIN_SATURATION
+
+              &&
+
+              v >=
+              MIN_VALUE
+
+            ) {
+
+              redPixels++;
+
+            }
+
+          }
+
+        }
+
+
+        const redRatio =
+          sampledPixels
+            ? redPixels /
+              sampledPixels
+            : 0;
+
+
+        const percentage =
+          Math.round(
+            redRatio * 100
+          );
+
+
+        statusText.textContent =
+          `Escaneando rojo... ${percentage}% detectado`;
+
+
+        if (
+          redRatio >=
+          REQUIRED_RED_RATIO
+        ) {
+
+          consecutiveRedFrames++;
+
+        } else {
+
+          consecutiveRedFrames = 0;
+
+        }
+
+
+        if (
+
+          consecutiveRedFrames >=
+          REQUIRED_CONSECUTIVE_FRAMES
+
+        ) {
+
+          unlockExperience();
+
+          return;
+
+        }
+
+      }
+
+
+      requestAnimationFrame(
+        processHSVFrame
+      );
+
+    }
+
+
+    // ============================================================
+    // DESBLOQUEO
+    // ============================================================
+
+    function unlockExperience() {
+
+      redUnlocked = true;
+
+
+      /*
+        SOLO apagamos el procesamiento HSV.
+        NO cerramos la cámara.
+        NO ocultamos el video.
+      */
+      scanGuide.style.display =
+        'none';
+
+
+      statusText.textContent =
+        'Tarjeta detectada. Preparando Realidad Aumentada...';
+
+
+      updateDebug(
+        'HSV detenido; cámara sigue activa'
+      );
+
+
+      updateStartButton();
+
+
+      /*
+        Por seguridad, pedimos que el video siga reproduciéndose.
+      */
+      video
+        .play()
+        .catch(
+          () => {}
+        );
+
+    }
+
+
+    function updateStartButton() {
+
+      if (!redUnlocked) {
+
+        btnStartAR.style.display =
+          'none';
+
+        return;
+
+      }
+
+
+      btnStartAR.style.display =
+        'block';
+
+
+      if (!xrSupported) {
+
+        btnStartAR.disabled =
+          true;
+
+
+        btnStartAR.textContent =
+          'WebXR AR no disponible';
+
+
+        statusText.textContent =
+          'La tarjeta fue detectada, pero este navegador/dispositivo no soporta WebXR immersive-ar.';
+
+
+        return;
+
+      }
+
+
+      if (!modelLoaded) {
+
+        btnStartAR.disabled =
+          true;
+
+
+        btnStartAR.textContent =
+          'Cargando colegio...';
+
+
+        statusText.textContent =
+          'Tarjeta detectada. Terminando de cargar el colegio...';
+
+
+        return;
+
+      }
+
+
+      btnStartAR.disabled =
+        false;
+
+
+      btnStartAR.textContent =
+        'Entrar en Realidad Aumentada';
+
+
+      statusText.textContent =
+        'Tarjeta detectada. Tocá “Entrar en Realidad Aumentada”.';
+
+    }
+
+
+    // ============================================================
+    // INICIO WEBXR
+    // ============================================================
+
+    btnStartAR.addEventListener(
+
+      'click',
+
+      () => {
+
+        if (
+          !redUnlocked ||
+          !xrSupported ||
+          !modelLoaded ||
+          xrSession
+        ) {
+          return;
+        }
+
+
+        btnStartAR.disabled =
+          true;
+
+
+        btnStartAR.textContent =
+          'Iniciando AR...';
+
+
+        statusText.textContent =
+          'Iniciando Realidad Aumentada...';
+
+
+        /*
+          MUY IMPORTANTE:
+
+          El requestSession ocurre directamente dentro del click
+          del usuario.
+
+          Liberamos getUserMedia de forma síncrona y enseguida
+          pedimos la sesión XR.
+        */
+        stopPreviewCamera();
+
+
+        const sessionPromise =
+          navigator.xr.requestSession(
+
+            'immersive-ar',
+
+            {
+
+              requiredFeatures: [
+                'hit-test'
+              ],
+
+              optionalFeatures: [
+                'dom-overlay'
+              ],
+
+              domOverlay: {
+                root: overlay
+              }
+
+            }
+
+          );
+
+
+        sessionPromise
+          .then(
+            startXRSession
+          )
+          .catch(
+            handleXRStartError
+          );
+
+      }
+
+    );
+
+
+    async function startXRSession(
+      session
+    ) {
+
+      xrSession =
+        session;
+
+
+      /*
+        Ahora sí ocultamos el video HTML.
+        La cámara pasa a ser administrada por WebXR.
+      */
+      video.style.display =
+        'none';
+
+
+      threeCanvas.style.display =
+        'block';
+
+
+      btnStartAR.style.display =
+        'none';
+
+
+      btnExit.style.display =
+        'inline-block';
+
+
+      btnReposition.style.display =
+        'none';
+
+
+      statusText.textContent =
+        'AR iniciada. Mové el teléfono lentamente y apuntá al piso.';
+
+
+      debugText.textContent =
+        'WebXR activo · buscando superficie horizontal';
+
+
+      /*
+        Vincula la sesión al renderer Three.js.
+      */
+      await renderer.xr.setSession(
+        session
+      );
+
+
+      /*
+        Pedimos una fuente de Hit Test desde la vista del usuario.
+      */
+      const viewerSpace =
+        await session.requestReferenceSpace(
+          'viewer'
+        );
+
+
+      hitTestSource =
+        await session.requestHitTestSource({
+          space: viewerSpace
+        });
+
+
+      hitTestSourceRequested =
+        true;
+
+
+      /*
+        El tap dentro de la sesión coloca el modelo
+        en el último hit válido.
+      */
+      session.addEventListener(
+        'select',
+        placeSchool
+      );
+
+
+      session.addEventListener(
+
+        'end',
+
+        onXRSessionEnded,
+
+        {
+          once: true
+        }
+
+      );
+
+
+      /*
+        Algunos botones HTML dentro del DOM Overlay pueden generar
+        un "select" XR. Evitamos que lo hagan.
+      */
+      btnReposition.addEventListener(
+        'beforexrselect',
+        event => event.preventDefault()
+      );
+
+
+      btnExit.addEventListener(
+        'beforexrselect',
+        event => event.preventDefault()
+      );
+
+
+      renderer.setAnimationLoop(
+        renderXR
+      );
+
+    }
+
+
+    function handleXRStartError(
+      error
+    ) {
+
+      console.error(
+        '[WebXR] No se pudo abrir immersive-ar:',
+        error
+      );
+
+
+      xrSession = null;
+
+
+      btnStartAR.disabled =
+        false;
+
+
+      btnStartAR.textContent =
+        'Reintentar Realidad Aumentada';
+
+
+      btnStartAR.style.display =
+        'block';
+
+
+      statusText.textContent =
+        'No se pudo iniciar WebXR. Recuperando la cámara...';
+
+
+      /*
+        La tarjeta ya fue validada.
+        Recuperamos la preview, pero NO volvemos a hacer HSV.
+      */
+      recoverPreviewAfterXRError();
+
+    }
+
+
+    async function recoverPreviewAfterXRError() {
+
+      try {
+
+        cameraStream =
+          await navigator.mediaDevices.getUserMedia({
+
+            video: {
+
+              facingMode: {
+                ideal: 'environment'
+              }
+
+            },
+
+            audio: false
+
+          });
+
+
+        video.srcObject =
+          cameraStream;
+
+
+        video.style.display =
+          'block';
+
+
+        await video.play();
+
+
+        statusText.textContent =
+          'La cámara volvió. Podés reintentar entrar en AR.';
+
+
+        updateDebug(
+          'WebXR falló; cámara recuperada'
+        );
+
+
+      } catch (error) {
+
+        console.error(
+          '[CAM] No se pudo recuperar:',
+          error
+        );
+
+
+        statusText.textContent =
+          'WebXR falló y no pude recuperar la cámara. Recargá la página.';
+
+      }
+
+    }
+
+
+    // ============================================================
+    // HIT TEST
+    // ============================================================
+
+    const hitMatrix =
+      new THREE.Matrix4();
+
+
+    const hitQuaternion =
+      new THREE.Quaternion();
+
+
+    const surfaceNormal =
+      new THREE.Vector3();
+
+
+    const worldUp =
+      new THREE.Vector3(
+        0,
+        1,
+        0
+      );
+
+
+    function renderXR(
+      time,
+      frame
+    ) {
+
+      if (
+        frame &&
+        hitTestSourceRequested &&
+        hitTestSource &&
+        !modelPlaced
+      ) {
+
+        const referenceSpace =
+          renderer.xr.getReferenceSpace();
+
+
+        const hitResults =
+          frame.getHitTestResults(
+            hitTestSource
+          );
+
+
+        let validPose =
+          null;
+
+
+        /*
+          Buscamos el primer hit suficientemente horizontal.
+          Así evitamos plantar el colegio sobre una pared.
+        */
+        for (
+          const hit of hitResults
+        ) {
+
+          const pose =
+            hit.getPose(
+              referenceSpace
+            );
+
+
+          if (!pose) {
+            continue;
+          }
+
+
+          hitMatrix.fromArray(
+            pose.transform.matrix
+          );
+
+
+          hitQuaternion.setFromRotationMatrix(
+            hitMatrix
+          );
+
+
+          surfaceNormal
+            .set(
+              0,
+              1,
+              0
+            )
+            .applyQuaternion(
+              hitQuaternion
+            )
+            .normalize();
+
+
+          const horizontalScore =
+            Math.abs(
+              surfaceNormal.dot(
+                worldUp
+              )
+            );
+
+
+          /*
+            1 = totalmente horizontal.
+            0 = vertical.
+          */
+          if (
+            horizontalScore >
+            0.72
+          ) {
+
+            validPose =
+              pose;
+
+            break;
+
+          }
+
+        }
+
+
+        if (validPose) {
+
+          reticle.visible =
+            true;
+
+
+          reticle.matrix.fromArray(
+            validPose.transform.matrix
+          );
+
+
+          latestHitMatrix =
+            new THREE.Matrix4()
+            .fromArray(
+              validPose.transform.matrix
+            );
+
+
+          statusText.textContent =
+            'Piso detectado. Tocá la pantalla para colocar el colegio.';
+
+
+        } else {
+
+          reticle.visible =
+            false;
+
+
+          latestHitMatrix =
+            null;
+
+
+          statusText.textContent =
+            'Buscando piso... mové el teléfono lentamente.';
+
+        }
+
+      }
+
+
+      renderer.render(
+        scene,
+        camera
+      );
+
+    }
+
+
+    // ============================================================
+    // COLOCAR EL COLEGIO
+    // ============================================================
+
+    function placeSchool() {
+
+      if (modelPlaced) {
+        return;
+      }
+
+
+      if (!latestHitMatrix) {
+
+        statusText.textContent =
+          'Todavía no encontré el piso. Mové el teléfono un poco más.';
+
+        return;
+
+      }
+
+
+      schoolRoot.matrixAutoUpdate =
+        false;
+
+
+      schoolRoot.matrix.copy(
+        latestHitMatrix
+      );
+
+
+      schoolRoot.visible =
+        true;
+
+
+      modelPlaced =
+        true;
+
+
+      reticle.visible =
+        false;
+
+
+      btnReposition.style.display =
+        'inline-block';
+
+
+      statusText.textContent =
+        'Colegio fijado. Ya podés caminar alrededor.';
+
+
+      debugText.textContent =
+        'Modelo anclado en coordenadas WebXR';
+
+
+      /*
+        IMPORTANTE:
+        No volvemos a cambiar la matriz del colegio.
+        WebXR actualiza la cámara mientras vos te movés.
+      */
+
+    }
+
+
+    // ============================================================
+    // REUBICAR
+    // ============================================================
+
+    btnReposition.addEventListener(
+
+      'click',
+
+      event => {
+
+        event.preventDefault();
+
+        event.stopPropagation();
+
+
+        modelPlaced =
+          false;
+
+
+        latestHitMatrix =
+          null;
+
+
+        schoolRoot.visible =
+          false;
+
+
+        btnReposition.style.display =
+          'none';
+
+
+        statusText.textContent =
+          'Reubicación activa. Apuntá nuevamente al piso.';
+
+      }
+
+    );
+
+
+    // ============================================================
+    // SALIR DE AR
+    // ============================================================
+
+    btnExit.addEventListener(
+
+      'click',
+
+      event => {
+
+        event.preventDefault();
+
+        event.stopPropagation();
+
+
+        if (xrSession) {
+
+          xrSession.end();
+
+        }
+
+      }
+
+    );
+
+
+    function onXRSessionEnded() {
+
+      renderer.setAnimationLoop(
+        null
+      );
+
+
+      if (hitTestSource) {
+
+        try {
+
+          hitTestSource.cancel();
+
+        } catch (_) {}
+
+      }
+
+
+      hitTestSource =
+        null;
+
+
+      hitTestSourceRequested =
+        false;
+
+
+      xrSession =
+        null;
+
+
+      reticle.visible =
+        false;
+
+
+      schoolRoot.visible =
+        false;
+
+
+      modelPlaced =
+        false;
+
+
+      latestHitMatrix =
+        null;
+
+
+      threeCanvas.style.display =
+        'none';
+
+
+      btnExit.style.display =
+        'none';
+
+
+      btnReposition.style.display =
+        'none';
+
+
+      btnRestart.style.display =
+        'block';
+
+
+      statusText.textContent =
+        'Sesión AR finalizada.';
+
+
+      debugText.textContent =
+        'WebXR cerrado';
+
+    }
+
+
+    btnRestart.addEventListener(
+
+      'click',
+
+      () => {
+
+        location.reload();
+
+      }
+
+    );
+
+
+    // ============================================================
+    // DEBUG
+    // ============================================================
+
+    function updateDebug(
+      extra = ''
+    ) {
+
+      let cameraState =
+        'sin stream';
+
+
+      if (cameraStream) {
+
+        const track =
+          cameraStream
+            .getVideoTracks()[0];
+
+
+        if (track) {
+
+          cameraState =
+            track.readyState;
+
+        }
+
+      }
+
+
+      const xrState =
+        xrSupported
+          ? 'sí'
+          : 'no';
+
+
+      const glbState =
+        modelLoaded
+          ? 'listo'
+          : 'cargando';
+
+
+      debugText.textContent =
+        `Cámara: ${cameraState} · WebXR: ${xrState} · GLB: ${glbState}${extra ? ' · ' + extra : ''}`;
+
+    }
+
+
+    // ============================================================
+    // RESIZE
+    // ============================================================
+
+    window.addEventListener(
+
+      'resize',
+
+      () => {
+
+        camera.aspect =
+          window.innerWidth /
+          window.innerHeight;
+
+
+        camera.updateProjectionMatrix();
+
+
+        renderer.setSize(
+          window.innerWidth,
+          window.innerHeight
+        );
+
+      }
+
+    );
+
+
+    // ============================================================
+    // INICIO
+    // ============================================================
+
+    async function init() {
+
+      await checkXRSupport();
+
+      await startPreviewCamera();
+
+    }
+
+
+    init();
+
+  </script>
+
+</body>
+</html>
