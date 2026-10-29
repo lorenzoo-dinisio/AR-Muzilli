@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>AR Muzilli - Técnica N°20</title>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+    }
+  }
+  </script>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      color: #fff;
+      font-family: Arial, Helvetica, sans-serif;
+      overscroll-behavior: none;
+    }
+    [hidden] { display: none !important; }
+    #three-canvas {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+    }
+    #overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      pointer-events: none;
+    }
+    #top-panel {
+      position: absolute;
+      top: max(14px, env(safe-area-inset-top));
+      left: 50%;
+      transform: translateX(-50%);
+      width: min(91vw, 520px);
+      box-sizing: border-box;
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: rgba(0, 0, 0, .74);
+      text-align: center;
+      box-shadow: 0 5px 18px rgba(0, 0, 0, .28);
+    }
+    #status { font-size: 14px; font-weight: 800; line-height: 1.4; }
+    #debug { margin-top: 6px; font-size: 11px; line-height: 1.4; opacity: .78; }
+    #error-detail {
+      margin-top: 8px;
+      font-size: 12px;
+      line-height: 1.4;
+      color: #ffb8b8;
+      white-space: pre-line;
+      overflow-wrap: anywhere;
+    }
+    button { cursor: pointer; pointer-events: auto; font-family: inherit; }
+    button:disabled { cursor: default; opacity: .6; }
+    .main-button {
+      position: absolute;
+      left: 50%;
+      bottom: max(36px, env(safe-area-inset-bottom));
+      transform: translateX(-50%);
+      min-width: 260px;
+      max-width: 92vw;
+      padding: 16px 22px;
+      border: 0;
+      border-radius: 999px;
+      background: #fff;
+      color: #111;
+      font-size: 16px;
+      font-weight: 900;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, .38);
+    }
+    #secondary-controls, #xr-controls {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      pointer-events: auto;
+    }
+    #secondary-controls { bottom: calc(max(36px, env(safe-area-inset-bottom)) + 68px); }
+    #xr-controls {
+      bottom: max(24px, env(safe-area-inset-bottom));
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      justify-content: center;
+      width: max-content;
+      max-width: 94vw;
+    }
+    #secondary-controls button, #xr-controls button {
+      border: 1px solid rgba(255, 255, 255, .3);
+      border-radius: 999px;
+      padding: 11px 16px;
+      background: rgba(15, 15, 15, .86);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 800;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="three-canvas" hidden></canvas>
+  <div id="overlay">
+    <div id="top-panel">
+      <div id="status" role="status">Preparando el colegio...</div>
+      <div id="debug">WebXR: comprobando · GLB: descargando</div>
+      <div id="error-detail" role="alert" hidden></div>
+    </div>
+    <button id="btn-start-ar" class="main-button" type="button" disabled>Preparando...</button>
+    <div id="secondary-controls" hidden>
+      <button id="btn-restart" type="button">Volver a empezar</button>
+    </div>
+    <div id="xr-controls" hidden>
+      <button id="btn-reposition" type="button" hidden>Reubicar colegio</button>
+      <button id="btn-exit" type="button">Salir de AR</button>
+    </div>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+
+    const MODEL_URL = './et20optimizada.glb';
+    const MODEL_SCALE = 0.005;
+    const threeCanvas = document.getElementById('three-canvas');
+    const overlay = document.getElementById('overlay');
+    const statusText = document.getElementById('status');
+    const debugText = document.getElementById('debug');
+    const errorText = document.getElementById('error-detail');
+    const btnStartAR = document.getElementById('btn-start-ar');
+    const secondaryControls = document.getElementById('secondary-controls');
+    const xrControls = document.getElementById('xr-controls');
+    const btnRestart = document.getElementById('btn-restart');
+    const btnReposition = document.getElementById('btn-reposition');
+    const btnExit = document.getElementById('btn-exit');
+
+    let xrSupport = 'checking';
+    let supportDetail = '';
+    let modelState = 'loading';
+    let modelProgress = 'descargando';
+    let modelError = '';
+    let xrError = '';
+    let starting = false;
+    let activeRun = null;
+    let latestHitMatrix = null;
+    let modelPlaced = false;
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.01, 100);
+    let renderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ canvas: threeCanvas, alpha: true, antialias: true });
+    } catch (error) {
+      statusText.textContent = 'No se pudo iniciar el visor 3D.';
+      debugText.textContent = 'Error al iniciar los gráficos';
+      errorText.textContent = error.message || String(error);
+      errorText.hidden = false;
+      btnStartAR.hidden = true;
+      secondaryControls.hidden = false;
+      btnRestart.addEventListener('click', () => location.reload());
+      throw error;
+    }
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setClearColor(0x000000, 0);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.xr.enabled = true;
+    renderer.xr.setReferenceSpaceType('local');
+
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2.4));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 2);
+    dirLight.position.set(2, 4, 2);
+    scene.add(dirLight);
+
+    const reticleGeometry = new THREE.RingGeometry(0.075, 0.105, 48);
+    reticleGeometry.rotateX(-Math.PI / 2);
+    const reticle = new THREE.Mesh(reticleGeometry, new THREE.MeshBasicMaterial({
+      color: 0xffffff, transparent: true, opacity: 0.92, side: THREE.DoubleSide
+    }));
+    reticle.matrixAutoUpdate = false;
+    reticle.visible = false;
+    scene.add(reticle);
+
+    const schoolRoot = new THREE.Group();
+    schoolRoot.visible = false;
+    scene.add(schoolRoot);
+
+    function updateDebug() {
+      const support = activeRun?.ready ? 'activo'
+        : xrSupport === 'checking' ? 'comprobando'
+        : xrSupport === 'supported' ? 'compatible' : 'no disponible';
+      debugText.textContent = `WebXR: ${support} · GLB: ${modelProgress}`;
+    }
+
+    function updateStartUI() {
+      updateDebug();
+      if (activeRun?.ready) return;
+      btnStartAR.hidden = false;
+      btnStartAR.disabled = true;
+      xrControls.hidden = true;
+      const detail = modelError || xrError || supportDetail;
+      errorText.textContent = detail;
+      errorText.hidden = !detail;
+      secondaryControls.hidden = !detail;
+
+      if (starting) {
+        btnStartAR.textContent = 'Iniciando AR...';
+        statusText.textContent = 'Abriendo la cámara en realidad aumentada...';
+      } else if (modelState === 'error') {
+        btnStartAR.textContent = 'Error al cargar el colegio';
+        statusText.textContent = 'No se pudo cargar el modelo. Revisá el detalle y volvé a empezar.';
+      } else if (xrSupport === 'checking') {
+        btnStartAR.textContent = 'Comprobando compatibilidad...';
+        statusText.textContent = 'Comprobando si se puede iniciar AR...';
+      } else if (xrSupport !== 'supported') {
+        btnStartAR.textContent = 'AR no disponible';
+        statusText.textContent = 'Este navegador no informa soporte para iniciar AR.';
+      } else if (modelState !== 'ready') {
+        btnStartAR.textContent = 'Cargando colegio...';
+        statusText.textContent = 'Preparando el colegio. Enseguida vas a poder buscar el piso.';
+      } else {
+        btnStartAR.disabled = false;
+        btnStartAR.textContent = xrError ? 'Reintentar AR' : 'Iniciar AR';
+        statusText.textContent = xrError
+          ? 'No se pudo iniciar AR. Podés volver a intentarlo.'
+          : 'Tocá “Iniciar AR” y apuntá al piso.';
+      }
+    }
+
+    async function checkXRSupport() {
+      if (location.protocol === 'file:' || !window.isSecureContext) {
+        xrSupport = 'unsupported';
+        supportDetail = 'Abrí el proyecto publicado en GitHub Pages con HTTPS, con el HTML y el GLB en la misma carpeta.';
+      } else if (!navigator.xr) {
+        xrSupport = 'unsupported';
+        supportDetail = 'WebXR no está disponible en este navegador. Probá la página en un teléfono y navegador compatibles con AR.';
+      } else {
+        try {
+          const supported = await navigator.xr.isSessionSupported('immersive-ar');
+          xrSupport = supported ? 'supported' : 'unsupported';
+          if (!supported) supportDetail = 'El dispositivo o navegador no permite esta sesión de realidad aumentada.';
+        } catch (error) {
+          xrSupport = 'unsupported';
+          supportDetail = `No se pudo comprobar la compatibilidad: ${error.message || String(error)}`;
+        }
+      }
+      updateStartUI();
+    }
+
+    async function loadSchool() {
+      const dracoLoader = new DRACOLoader();
+      dracoLoader.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/libs/draco/gltf/');
+      dracoLoader.setWorkerLimit(2);
+      const loader = new GLTFLoader();
+      loader.setDRACOLoader(dracoLoader);
+      try {
+        const gltf = await loader.loadAsync(MODEL_URL, progress => {
+          if (progress.lengthComputable && progress.total > 0) {
+            modelProgress = progress.loaded >= progress.total
+              ? 'preparando modelo'
+              : `descargando ${Math.floor(progress.loaded / progress.total * 100)}%`;
+          } else {
+            modelProgress = `descargando (${Math.round(progress.loaded / 1024)} KB)`;
+          }
+          updateStartUI();
+        });
+        const schoolModel = gltf.scene;
+        schoolModel.scale.setScalar(MODEL_SCALE);
+        schoolModel.updateMatrixWorld(true);
+        const box = new THREE.Box3().setFromObject(schoolModel);
+        if (box.isEmpty()) throw new Error('El modelo no contiene geometría visible.');
+        const center = box.getCenter(new THREE.Vector3());
+        schoolModel.position.x -= center.x;
+        schoolModel.position.z -= center.z;
+        schoolModel.position.y -= box.min.y;
+        schoolModel.updateMatrixWorld(true);
+        schoolRoot.add(schoolModel);
+        modelState = 'ready';
+        modelProgress = 'listo';
+      } catch (error) {
+        console.error('[GLB]', error);
+        modelState = 'error';
+        modelProgress = 'ERROR';
+        modelError = `No se pudo cargar et20optimizada.glb.\n${error.message || String(error)}`;
+      } finally {
+        dracoLoader.dispose();
+        updateStartUI();
+      }
+    }
+
+    function isCurrentRun(run) {
+      return activeRun === run && !run.ended;
+    }
+
+    function cleanUpRun(run) {
+      if (run.source) {
+        try { run.source.cancel(); } catch (_) {}
+        run.source = null;
+      }
+      run.session.removeEventListener('select', placeSchool);
+      if (activeRun !== run) return;
+      renderer.setAnimationLoop(null);
+      activeRun = null;
+      latestHitMatrix = null;
+      modelPlaced = false;
+      reticle.visible = false;
+      schoolRoot.visible = false;
+      threeCanvas.hidden = true;
+      xrControls.hidden = true;
+      btnReposition.hidden = true;
+      btnExit.disabled = false;
+    }
+
+    // La sesión se solicita directamente desde este único gesto del usuario.
+    btnStartAR.addEventListener('click', async () => {
+      if (starting || activeRun || modelState !== 'ready' || xrSupport !== 'supported') return;
+      starting = true;
+      xrError = '';
+      updateStartUI();
+      let run = null;
+      try {
+        const session = await navigator.xr.requestSession('immersive-ar', {
+          requiredFeatures: ['hit-test'],
+          optionalFeatures: ['dom-overlay'],
+          domOverlay: { root: overlay }
+        });
+        run = { session, source: null, ended: false, ready: false };
+        activeRun = run;
+        session.addEventListener('end', () => {
+          run.ended = true;
+          cleanUpRun(run);
+          if (!starting) updateStartUI();
+        }, { once: true });
+
+        threeCanvas.hidden = false;
+        await renderer.xr.setSession(session);
+        if (!isCurrentRun(run)) return;
+        const viewerSpace = await session.requestReferenceSpace('viewer');
+        if (!isCurrentRun(run)) return;
+        const source = await session.requestHitTestSource({ space: viewerSpace });
+        if (!isCurrentRun(run)) {
+          try { source.cancel(); } catch (_) {}
+          return;
+        }
+
+        run.source = source;
+        run.ready = true;
+        session.addEventListener('select', placeSchool);
+        btnStartAR.hidden = true;
+        secondaryControls.hidden = true;
+        errorText.hidden = true;
+        xrControls.hidden = false;
+        statusText.textContent = 'Buscando piso... apuntá hacia abajo y mové el teléfono lentamente.';
+        updateDebug();
+        renderer.setAnimationLoop(renderXR);
+      } catch (error) {
+        console.error('[WebXR]', error);
+        xrError = `${error.name || 'Error'}: ${error.message || String(error)}`;
+        if (run) {
+          if (!run.ended) {
+            try { await run.session.end(); } catch (_) {}
+          }
+          cleanUpRun(run);
+        }
+      } finally {
+        starting = false;
+        if (!activeRun?.ready) updateStartUI();
+      }
+    });
+
+    const hitMatrix = new THREE.Matrix4();
+    const hitQuaternion = new THREE.Quaternion();
+    const surfaceNormal = new THREE.Vector3();
+    const worldUp = new THREE.Vector3(0, 1, 0);
+
+    function renderXR(time, frame) {
+      const run = activeRun;
+      if (!run?.ready) return;
+      if (!modelPlaced) {
+        const referenceSpace = renderer.xr.getReferenceSpace();
+        let validPose = null;
+        if (frame && referenceSpace && run.source) {
+          for (const hit of frame.getHitTestResults(run.source)) {
+            const pose = hit.getPose(referenceSpace);
+            if (!pose) continue;
+            hitMatrix.fromArray(pose.transform.matrix);
+            hitQuaternion.setFromRotationMatrix(hitMatrix);
+            surfaceNormal.set(0, 1, 0).applyQuaternion(hitQuaternion).normalize();
+            if (Math.abs(surfaceNormal.dot(worldUp)) > 0.72) {
+              validPose = pose;
+              break;
+            }
+          }
+        }
+        if (validPose) {
+          reticle.visible = true;
+          reticle.matrix.fromArray(validPose.transform.matrix);
+          latestHitMatrix = hitMatrix.copy(reticle.matrix);
+          statusText.textContent = 'Piso detectado. Tocá la pantalla para colocar el colegio.';
+        } else {
+          reticle.visible = false;
+          latestHitMatrix = null;
+          statusText.textContent = 'Buscando piso... apuntá hacia abajo y mové el teléfono lentamente.';
+        }
+      }
+      renderer.render(scene, camera);
+    }
+
+    function placeSchool() {
+      if (!activeRun?.ready || modelState !== 'ready' || modelPlaced || !latestHitMatrix) return;
+      schoolRoot.matrixAutoUpdate = false;
+      schoolRoot.matrix.copy(latestHitMatrix);
+      schoolRoot.visible = true;
+      modelPlaced = true;
+      reticle.visible = false;
+      btnReposition.hidden = false;
+      statusText.textContent = 'Colegio colocado. Ya podés caminar alrededor.';
+    }
+
+    // Los controles no deben disparar también una selección sobre el piso.
+    xrControls.addEventListener('beforexrselect', event => event.preventDefault());
+    btnReposition.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!activeRun?.ready) return;
+      modelPlaced = false;
+      latestHitMatrix = null;
+      schoolRoot.visible = false;
+      reticle.visible = false;
+      btnReposition.hidden = true;
+      statusText.textContent = 'Apuntá nuevamente al piso para reubicar el colegio.';
+    });
+
+    btnExit.addEventListener('click', async event => {
+      event.preventDefault();
+      event.stopPropagation();
+      const run = activeRun;
+      if (!run || btnExit.disabled) return;
+      btnExit.disabled = true;
+      try {
+        await run.session.end();
+      } catch (error) {
+        errorText.textContent = `No se pudo cerrar AR: ${error.message || String(error)}`;
+        errorText.hidden = false;
+        btnExit.disabled = false;
+      }
+    });
+    btnRestart.addEventListener('click', () => location.reload());
+    addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    checkXRSupport();
+    loadSchool();
+  </script>
+</body>
+</html>
